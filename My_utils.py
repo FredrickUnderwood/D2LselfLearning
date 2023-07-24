@@ -4,6 +4,15 @@ import torchvision
 from torch.utils import data
 from matplotlib_inline import backend_inline
 import matplotlib.pyplot as plt
+from IPython import display
+
+
+# 随机梯度下降优化
+def sgd(params, learning_rate, batch_size):
+    with torch.no_grad():
+        for param in params:
+            param -= learning_rate * param.grad / batch_size
+            param.grad.zero_()
 
 
 # 使用svg格式来展示图片
@@ -78,6 +87,30 @@ class Animator:
         if legend is None:
             legend = []
         use_svg_display()
-        self.fig, self.axes = plt.subplot(nrows, ncols, figsize=figsize)
+        self.fig, self.axes = plt.subplots(nrows, ncols, figsize=figsize)
         if nrows * ncols == 1:
-            self.axes = [self.axes, ]
+            self.axes = [self.axes, ]  # 转换为列表用以统一数据结构
+        self.config_axes = lambda: set_axes(self.axes[0], xlabel, ylabel, xlim, ylim,
+                                            xscale, yscale, legend)
+        self.X, self.Y, self.fmts = None, None, fmts
+
+    def add(self, x, y):  # x,y包含多个数据点
+        if not hasattr(y, '__len__'):  # 判断y是否是一个可迭代类型（list等）
+            y = [y]
+        n = len(y)
+        if not hasattr(x, '__len__'):
+            x = [x] * n
+        if not self.X:
+            self.X = [[] for _ in range(n)]
+        if not self.Y:
+            self.Y = [[] for _ in range(n)]
+        for i, (a, b) in enumerate(zip(x, y)):  # 将要绘制的点的集合传入类中
+            if a is not None and b is not None:
+                self.X[i].append(a)
+                self.Y[i].append(b)
+        self.axes[0].cla()  # 清楚该图上之前的内容，每次传进来的(x,y)是全体的，每一轮绘制从头绘制到最后一个点
+        for x, y, fmts in zip(self.X, self.Y, self.fmts):
+            self.axes[0].plot(x, y, fmts)  # 画图过程
+        self.config_axes()  # 配置axe的相关参数
+        display.display(self.fig)  # 显示绘制的图片
+        display.clear_output(wait=True)  # 清楚notebook中的输出内容
