@@ -114,3 +114,56 @@ class Animator:
         self.config_axes()  # 配置axe的相关参数
         display.display(self.fig)  # 显示绘制的图片
         display.clear_output(wait=True)  # 清楚notebook中的输出内容
+
+
+# 用于计数预测对的数量（多分类）
+def count_accurate(y_hat, y):
+    if len(y_hat.shape) > 1 and y_hat.shape[1] > 1:
+        y_hat = y_hat.argmax(axis=1)
+    correct_count = 0
+    for i in range(len(y_hat)):
+        if y_hat[i].type(y.dtype) == y[i]:
+            correct_count += 1
+    return float(correct_count)
+
+
+# 计算模型的准确率
+def calc_accuracy(net, data_iter):
+    if isinstance(net, torch.nn.Module):
+        net.eval()  # 进入评估模式
+    metric = Accumulator(2)
+    with torch.no_grad():
+        for X, y in data_iter:
+            metric.add(count_accurate(net(X), y), y.numel())
+    return metric[0] / metric[1]
+
+
+# Softmax回归的训练方法
+def train_epoch_ch3(train_iter, net, loss, updater):
+    if isinstance(net, torch.nn.Module):
+        net.train()
+    metric = Accumulator(3)
+    for X, y in train_iter:
+        y_hat = net(X)
+        l = loss(y_hat, y)
+        if isinstance(updater, torch.optim.Optimizer):
+            # 用pytorch内置的优化器来优化
+            updater.zero_grad()
+            l.mean().backward()
+            updater.step()
+        else:
+            l.sum().backward()
+            updater(X.shape[0])  # 第0维的数量就是batch_size
+    metric.add(l.sum(), count_accurate(y_hat, y), y.numel())
+    return metric[0] / metric[2], metric[1] / metric[2]
+
+
+# Softmax回归的训练方法
+def train_ch3(train_epochs, test_iter, train_iter, net, loss, updater):
+    animator = Animator(xlabel='epoch', xlim=[1, train_epochs], ylim=[0.3, 0.9],
+                        legend=['train loss', 'train acc', 'test acc'])
+    for epoch in range(train_epochs):
+        train_metrics = train_epoch_ch3(train_iter, net, loss, updater)
+        test_acc = calc_accuracy(net, test_iter)
+        animator.add(epoch + 1, train_metrics + (test_acc,))
+    train_loss, train_acc = train_metrics
