@@ -7,12 +7,30 @@ import matplotlib.pyplot as plt
 from IPython import display
 
 
+# 生成人工数据集
+def generate_synthetic_data(w, b, num_examples):
+    x = torch.normal(0, 1, (num_examples, len(w)))
+    y = torch.matmul(x, w) + b
+    y += torch.normal(0, 0.01, y.shape)
+    return x, y.reshape((-1, 1))
+
+
+# 线性回归
+def LinearRegression(X, w, b):
+    return torch.matmul(X, w) + b
+
+
 # 随机梯度下降优化
 def sgd(params, learning_rate, batch_size):
     with torch.no_grad():
         for param in params:
             param -= learning_rate * param.grad / batch_size
             param.grad.zero_()
+
+
+# 平方损失函数
+def squared_loss(y_hat, y):
+    return (y_hat - y.reshape(y_hat.shape)) ** 2 / 2
 
 
 # 使用svg格式来展示图片
@@ -167,3 +185,19 @@ def train_ch3(train_epochs, test_iter, train_iter, net, loss, updater):
         test_acc = calc_accuracy(net, test_iter)
         animator.add(epoch + 1, train_metrics + (test_acc,))
     train_loss, train_acc = train_metrics
+
+
+# 生成pytorch数据迭代器
+def load_array(data_arrays, batch_size, is_Train=True):
+    data_set = data.TensorDataset(*data_arrays)  # 如果传入的data_arrays是feature和label的集合，*可以进行解包操作；TensorDataset则类似一个zip
+    return data.DataLoader(data_set, batch_size, shuffle=is_Train)
+
+
+# 用于计算模型损失率的函数
+def evaluate_loss(net, data_iter, loss):
+    metric = Accumulator(2)
+    for X, y in data_iter:
+        y_hat = net(X)
+        l = loss(y_hat, y)
+        metric.add(l.sum(), y.numel())
+    return metric[0] / metric[1]
