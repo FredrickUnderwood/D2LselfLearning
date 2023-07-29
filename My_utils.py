@@ -96,7 +96,7 @@ def set_axes(axes, xlabel, ylabel, xlim, ylim, xscale, yscale, legend):
     axes.grid()
 
 
-# 展示正确率、错误率随训练轮数改变的曲线
+# 展示正确率、错误率随训练轮数改变的曲线 这是一个动画类型！！！
 class Animator:
     def __init__(self, xlabel=None, ylabel=None, legend=None, xlim=None, ylim=None,
                  xscale='linear', yscale='linear',
@@ -201,3 +201,33 @@ def evaluate_loss(net, data_iter, loss):
         l = loss(y_hat, y)
         metric.add(l.sum(), y.numel())
     return metric[0] / metric[1]
+
+
+# 绘制非动画的静态曲线的函数
+def plot(X, Y=None, xlabel=None, ylabel=None, xlim=None, ylim=None, legend=None, xscale='linear', yscale='linear',
+         fmts=('-', 'm--', 'g-.', 'r:'), figsize=(3.5, 2.5), axes=None):
+    if legend is None:
+        legend = []
+    use_svg_display()
+    plt.rcParams['figure.figsize'] = figsize
+    axes = axes if axes else plt.gca()
+
+    # 判断一个变量是否只有一维
+    def has_one_axis(x):
+        return (hasattr(x, 'ndim') and x.ndim == 1 or isinstance(x, list) and not hasattr(x[0], '__len__'))
+
+    if has_one_axis(X):
+        X = [X]
+    if Y is None:
+        X, Y = [[]] * len(X), X
+    elif has_one_axis(Y):
+        Y = [Y]
+    if len(X) != len(Y):
+        X = X * len(Y)
+    axes.cla()
+    for x, y, fmt in zip(X, Y, fmts):
+        if len(x):
+            axes.plot(x, y, fmt)
+        else:
+            axes.plot(y, fmt)
+    set_axes(axes, xlabel, y, xlim, ylim, xscale, yscale, legend)
