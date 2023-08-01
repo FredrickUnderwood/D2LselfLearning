@@ -214,7 +214,7 @@ def plot(X, Y=None, xlabel=None, ylabel=None, xlim=None, ylim=None, legend=None,
 
     # 判断一个变量是否只有一维
     def has_one_axis(x):
-        return (hasattr(x, 'ndim') and x.ndim == 1 or isinstance(x, list) and not hasattr(x[0], '__len__'))
+        return hasattr(x, 'ndim') and x.ndim == 1 or isinstance(x, list) and not hasattr(x[0], '__len__')
 
     if has_one_axis(X):
         X = [X]
@@ -231,3 +231,17 @@ def plot(X, Y=None, xlabel=None, ylabel=None, xlim=None, ylim=None, legend=None,
         else:
             axes.plot(y, fmt)
     set_axes(axes, xlabel, y, xlim, ylim, xscale, yscale, legend)
+
+
+# 查询GPU是否存在
+def try_gpu(i=0):
+    if torch.cuda.device_count() >= i + 1:
+        return torch.device(f'cuda:{i}')
+    else:
+        return torch.device('cpu')
+
+
+# 查询机器上所有可用的GPU
+def try_all_gpu():
+    devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+    return devices if devices else torch.device('cpu')
