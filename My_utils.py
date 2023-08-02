@@ -245,3 +245,13 @@ def try_gpu(i=0):
 def try_all_gpu():
     devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
     return devices if devices else torch.device('cpu')
+
+
+# 二维互相关运算 == 卷积运算
+def corr2D(X, kernel):
+    h, w = kernel.shape
+    Y = torch.zeros(size=(X.shape[0] - h + 1, X.shape[1] - w + 1))
+    for i in range(Y.shape[0]):
+        for j in range(Y.shape[1]):
+            Y[i, j] = (X[i:i + h, j:j + w] * kernel).sum()
+    return Y
