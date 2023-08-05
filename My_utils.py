@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torchvision import transforms
 import torchvision
@@ -5,6 +6,8 @@ from torch.utils import data
 from matplotlib_inline import backend_inline
 import matplotlib.pyplot as plt
 from IPython import display
+import time
+import numpy
 
 
 # 生成人工数据集
@@ -255,3 +258,103 @@ def corr2D(X, kernel):
         for j in range(Y.shape[1]):
             Y[i, j] = (X[i:i + h, j:j + w] * kernel).sum()
     return Y
+
+
+# k折交叉验证
+def get_K_fold_data(k, i, X, y):
+    assert k > 1
+    fold_size = X.shape[0] // k
+    X_train, y_train = None, None
+    for j in range(k):
+        idx = slice(j * fold_size, (j + 1) * fold_size)
+        X_part, y_part = X[idx, :], y[idx, :]
+        if j == i:  # 选取作为验证集
+            X_valid, y_valid = X_part, y_part
+        elif X_train is None:  # 训练集的初始化
+            X_train, y_train = X_part, y_part
+        else:  # 训练集的添加
+            X_train = torch.cat((X_train, X_part), 0)
+            y_train = torch.cat((y_train, y_part), 0)
+    return X_train, y_train, X_valid, y_valid  # 返回训练集和验证集
+
+
+# 记录多任务训练时间
+class Timer:
+    def __init__(self):
+        self.times = []
+        self.start()
+
+    def start(self):
+        self.tik = time.time()
+
+    def stop(self):
+        self.times.append(time.time() - self.tik)
+        return self.times[-1]
+
+    def avg(self):
+        return (sum(self.times)) / (len(self.times))
+
+    def sum(self):
+        return sum(self.times)
+
+    def cumsum(self):
+        return np.array(self.times).cumsum().tolist()
+
+
+# GPU学习函数（基于对之前该库中函数的一些修改）
+
+
+# GPU计算准确率
+def evaluate_accuracy_gpu(net, data_iter, device=None):
+    if isinstance(net, torch.nn.Module):
+        net.eval()
+        if not device:
+            device = next(iter(net.parameters())).device
+    metric = Accumulator(2)
+    for X, y in data_iter:
+        if isinstance(X, list):
+            X = [x.to(device) for x in X]
+        else:
+            X = X.to(device)
+        y = y.to(device)
+        metric.add(count_accurate(net(X), y), y.numel())
+    return metric[0] / metric[1]
+
+
+# GPU训练函数
+def train_gpu(net, train_iter, test_iter, num_epochs, lr, device):
+    def init_weight(m):
+        if type(m) == torch.nn.Conv2d or type(m) == torch.nn.Linear:
+            torch.nn.init.xavier_uniform_(m.weight)
+
+    net.apply(init_weight)
+    print('training on:', device)
+    net.to(device)
+    optimizer = torch.optim.SGD(net.parameters(), lr=lr)
+    loss = torch.nn.CrossEntropyLoss()
+    animator = Animator(xlabel='epoch', legend=['train_loss', 'train_acc', 'test_acc'], xlim=[1, num_epochs])
+    timer, num_batches = Timer(), len(train_iter)
+    for epoch in range(num_epochs):
+        metric = Accumulator(3)
+        net.train()
+        for i, (X, y) in enumerate(train_iter):
+            timer.start()
+            optimizer.zero_grad()
+            X, y = X.to(device), y.to(device)
+            y_hat = net(X)
+            l = loss(y_hat, y)
+            l.backward()
+            optimizer.step()
+            with torch.no_grad():
+                metric.add(l * X.shape[0], count_accurate(y_hat, y), X.shape[0])
+            timer.stop()
+            train_l = metric[0] / metric[2]
+            train_acc = metric[1] / metric[2]
+            if (i + 1) % (num_batches // 5) == 0 or i == num_batches - 1:
+                animator.add(epoch + (i + 1) / num_batches, (train_l, train_acc, None))
+        test_acc = evaluate_accuracy_gpu(net, test_iter, device)
+        animator.add(epoch + 1, (None, None, test_acc))
+    print(f'loss {train_l:.3f}, train acc {train_acc:.3f}, '
+          f'test acc {test_acc:.3f}')
+    print(f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec '
+          f'on {str(device)}')
