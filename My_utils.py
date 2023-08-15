@@ -358,3 +358,14 @@ def train_gpu(net, train_iter, test_iter, num_epochs, lr, device):
           f'test acc {test_acc:.3f}')
     print(f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec '
           f'on {str(device)}')
+
+
+# 生成VGG块的函数
+def vgg_block(num_convs, in_channels, out_channels):
+    layers = []
+    for _ in range(num_convs):
+        layers.append(torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1))  # 加入若干个不改变原图像大小的卷积层
+        layers.append(torch.nn.ReLU())
+        in_channels = out_channels
+    layers.append(torch.nn.MaxPool2d(kernel_size=2, stride=2))
+    return torch.nn.Sequential(*layers)
