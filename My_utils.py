@@ -129,12 +129,12 @@ class Animator:
             if a is not None and b is not None:
                 self.X[i].append(a)
                 self.Y[i].append(b)
-        self.axes[0].cla()  # 清楚该图上之前的内容，每次传进来的(x,y)是全体的，每一轮绘制从头绘制到最后一个点
+        self.axes[0].cla()  # 清除该图上之前的内容，每次传进来的(x,y)是全体的，每一轮绘制从头绘制到最后一个点
         for x, y, fmts in zip(self.X, self.Y, self.fmts):
             self.axes[0].plot(x, y, fmts)  # 画图过程
         self.config_axes()  # 配置axe的相关参数
         display.display(self.fig)  # 显示绘制的图片
-        display.clear_output(wait=True)  # 清楚notebook中的输出内容
+        display.clear_output(wait=True)  # 清除notebook中的输出内容
 
 
 # 用于计数预测对的数量（多分类）
@@ -233,7 +233,7 @@ def plot(X, Y=None, xlabel=None, ylabel=None, xlim=None, ylim=None, legend=None,
             axes.plot(x, y, fmt)
         else:
             axes.plot(y, fmt)
-    set_axes(axes, xlabel, y, xlim, ylim, xscale, yscale, legend)
+    set_axes(axes, xlabel, ylabel, xlim, ylim, xscale, yscale, legend)
 
 
 # 查询GPU是否存在
