@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from IPython import display
 import time
 import numpy
+from torch import nn
+from torch.nn import functional as F
 
 
 # 生成人工数据集
@@ -369,3 +371,118 @@ def vgg_block(num_convs, in_channels, out_channels):
         in_channels = out_channels
     layers.append(torch.nn.MaxPool2d(kernel_size=2, stride=2))
     return torch.nn.Sequential(*layers)
+
+
+# 生成NiN块的函数
+def nin_block(in_channels, out_channels, kernel_size, stride, padding):
+    return torch.nn.Sequential(
+        torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding),  # 输入通道、输出通道、卷积核大小、步长、补全
+        torch.nn.ReLU(), torch.nn.Conv2d(out_channels, out_channels, kernel_size=1),
+        torch.nn.ReLU(), torch.nn.Conv2d(out_channels, out_channels, kernel_size=1),
+        torch.nn.ReLU()
+    )
+
+
+# GoogLeNet Inception构建类
+class Inception(nn.Module):
+    def __init__(self, in_channels, c1, c2, c3, c4, **kwargs):  # c1-c4是四条线路的输出通道的参数
+        super(Inception, self).__init__(**kwargs)
+        self.p1_1 = nn.Conv2d(in_channels, c1, kernel_size=1)  # 线路1，1*1的卷积核
+        self.p2_1 = nn.Conv2d(in_channels, c2[0], kernel_size=1)  # 线路2，1*1的卷积核连接3*3的卷积核，不改变图片尺寸
+        self.p2_2 = nn.Conv2d(c2[0], c2[1], kernel_size=3, padding=1)
+        self.p3_1 = nn.Conv2d(in_channels, c3[0], kernel_size=1)  # 线路3，1*1的卷积核连接5*5的卷积核，也不改变图片尺寸
+        self.p3_2 = nn.Conv2d(c3[0], c3[1], kernel_size=5, padding=2)
+        self.p4_1 = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)  # 线路4，3*3的最大池化层拼接1*1的卷积核
+        self.p4_2 = nn.Conv2d(in_channels, c4, kernel_size=1)
+
+    def forward(self, X):
+        p1 = F.relu(self.p1_1(X))
+        p2 = F.relu(self.p2_2(F.relu(self.p2_1(X))))
+        p3 = F.relu(self.p3_2(F.relu(self.p3_1(X))))
+        p4 = F.relu(self.p4_2(self.p4_1(X)))
+        return torch.cat((p1, p2, p3, p4), dim=1)  # 在列上做扩展
+
+
+# 实现批量归一化的函数
+def batch_norm(x, gamma, beta, moving_mean, moving_var, eps, momentum):
+    if not torch.is_grad_enabled():  # 如果不在训练模式，而是预测模式
+        x_hat = (x - moving_mean) / torch.sqrt(moving_var + eps)
+    else:
+        assert len(x.shape) in (2, 4)  # 对应全连接层和二维卷积层，tensor的维度是2或者4
+        if len(x.shape) == 2:  # 全连接层的情况
+            mean = x.mean(dim=0)
+            var = ((x - mean) ** 2).mean(dim=0)
+        else:
+            mean = x.mean(dim=(0, 2, 3), keepdim=True)  # 对每个通道求均值，keepdim后得到的是一个1*n*1*1的tensor
+            var = ((x - mean) ** 2).mean(dim=(0, 2, 3), keepdim=True)
+        x_hat = (x - mean) / torch.sqrt(var + eps)
+        # 更新移动平均值，相关内容：https://zhuanlan.zhihu.com/p/151786842
+        moving_mean = momentum * moving_mean + (1 - momentum) * mean
+        moving_var = momentum * moving_var + (1 - momentum) * var
+    y = gamma * x_hat + beta
+    return y, moving_mean.data, moving_var.data
+
+
+# 实现批量归一化层
+class BatchNorm(nn.Module):
+    def __init__(self, num_features, num_dims):
+        """
+        :param num_features: 表示全连接层的输出变量个数，或者卷积层的输出通道数
+        :param num_dims: 表示维度，对应全连接层和二维卷积层，tensor的维度是2或者4
+        """
+        super().__init__()
+        if num_dims == 2:
+            shape = (1, num_features)
+        else:
+            shape = (1, num_features, 1, 1)
+        self.gamma = nn.Parameter(torch.ones(shape))  # nn.Parameter()可参与求参数
+        self.beta = nn.Parameter(torch.zeros(shape))
+        self.moving_mean = torch.zeros(shape)
+        self.moving_var = torch.ones(shape)
+
+    def forward(self, X):
+        if self.moving_mean.device != X.device:
+            self.moving_mean = self.moving_mean.to(X.device)
+            self.moving_var = self.moving_var.to(X.device)
+        Y, self.moving_mean, self.moving_var = batch_norm(X, self.gamma, self.beta, self.moving_mean, self.moving_var,
+                                                          eps=1e-5, momentum=0.9)
+        return Y
+
+
+# ResNet实现
+class Residual(nn.Module):
+    def __init__(self, input_channels, num_channels, use_1x1conv=False, strides=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(input_channels, num_channels, kernel_size=3, padding=1,
+                               stride=strides)  # VGG中不改变图片大小的卷积层
+        self.conv2 = nn.Conv2d(num_channels, num_channels, kernel_size=3, padding=1)
+        if use_1x1conv:
+            self.conv3 = nn.Conv2d(input_channels, num_channels, kernel_size=1, stride=strides)
+        else:
+            self.conv3 = None
+        self.bn1 = nn.BatchNorm2d(num_channels)
+        self.bn2 = nn.BatchNorm2d(num_channels)
+
+    def forward(self, X):
+        """
+        convolution_1 -> batch_norm_1 -> ReLU_Activation -> convolution_2 -> batch_norm_2 -> Residual_layer -> ReLU_Activation
+        :param X:
+        :return:
+        """
+        Y = F.relu(self.bn1(self.conv1(X)))
+        Y = self.bn2(self.conv2(Y))
+        if self.conv3:
+            X = self.conv3(X)
+        Y += X
+        return F.relu(Y)
+
+
+# 生成残差块的函数
+def resnet_block(input_channels, num_channels, num_residuals, first_block=False):
+    blk = []
+    for i in range(num_residuals):
+        if i == 0 and not first_block:
+            blk.append(Residual(input_channels, num_channels, use_1x1conv=True, strides=2)) # 图片大小减半、通道数翻倍
+        else:
+            blk.append(Residual(num_channels, num_channels)) # 通道数和图片大小均不变
+    return blk
