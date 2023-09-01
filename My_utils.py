@@ -59,7 +59,7 @@ def load_data_from_fashion_MNIST(batch_size, resize=None):
 # 画图，包括图本身和图的label
 def show_image(imgs, row_num, col_num, titles=None, scale=1.5):
     figsize = (col_num * scale, row_num * scale)
-    _, axes = plt.subplot(row_num, col_num, figsize=figsize)
+    _, axes = plt.subplots(row_num, col_num, figsize=figsize)
     axes = axes.flatten()
     for i, (ax, img) in enumerate(zip(axes, imgs)):  # i是图片的索引
         if torch.is_tensor(img):
@@ -482,7 +482,33 @@ def resnet_block(input_channels, num_channels, num_residuals, first_block=False)
     blk = []
     for i in range(num_residuals):
         if i == 0 and not first_block:
-            blk.append(Residual(input_channels, num_channels, use_1x1conv=True, strides=2)) # 图片大小减半、通道数翻倍
+            blk.append(Residual(input_channels, num_channels, use_1x1conv=True, strides=2))  # 图片大小减半、通道数翻倍
         else:
-            blk.append(Residual(num_channels, num_channels)) # 通道数和图片大小均不变
+            blk.append(Residual(num_channels, num_channels))  # 通道数和图片大小均不变
     return blk
+
+
+# 生成残差块的函数
+def resnet_block(input_channels, num_channels, num_residuals, first_block=False):
+    blk = []
+    for i in range(num_residuals):
+        if i == 0 and not first_block:
+            blk.append(Residual(input_channels, num_channels, use_1x1conv=True, strides=2))  # 图片大小减半、通道数翻倍
+        else:
+            blk.append(Residual(num_channels, num_channels))  # 通道数和图片大小均不变
+    return blk
+
+
+# 设置子图的格式
+def set_figsize(figsize=(3.5, 2.5)):
+    use_svg_display()
+    plt.rcParams['figure.figsize'] = figsize
+
+
+# 从CIFAR10数据集中读取数据
+def load_data_from_CIFAR10(is_train, augs, batch_size):
+    dataset = torchvision.datasets.CIFAR10(root='../data', train=is_train, transform=augs, download=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=is_train, num_workers=4)
+    return dataloader
+
+#
