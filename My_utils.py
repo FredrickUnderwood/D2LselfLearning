@@ -488,15 +488,23 @@ def resnet_block(input_channels, num_channels, num_residuals, first_block=False)
     return blk
 
 
-# 生成残差块的函数
-def resnet_block(input_channels, num_channels, num_residuals, first_block=False):
-    blk = []
-    for i in range(num_residuals):
-        if i == 0 and not first_block:
-            blk.append(Residual(input_channels, num_channels, use_1x1conv=True, strides=2))  # 图片大小减半、通道数翻倍
-        else:
-            blk.append(Residual(num_channels, num_channels))  # 通道数和图片大小均不变
-    return blk
+# 生成ResNet18的函数
+def resnet18(num_classes, in_channels=1):
+    """
+    :param num_classes: 图片分类的分类种类数
+    :param in_channels:
+    :return: ResNet网络
+    """
+    net = nn.Sequential(nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
+                        nn.BatchNorm2d(64), nn.ReLU())
+
+    net.add_module('ResNet_Block1', nn.Sequential(*resnet_block(64, 64, 2, first_block=True)))
+    net.add_module('ResNet_Block2', nn.Sequential(*resnet_block(64, 128, 2)))
+    net.add_module('ResNet_Block3', nn.Sequential(*resnet_block(128, 256, 2)))
+    net.add_module('ResNet_Block4', nn.Sequential(*resnet_block(256, 512, 2)))
+    net.add_module('global_avg_pool', nn.AdaptiveAvgPool2d((1, 1)))
+    net.add_module('fully_connected', nn.Sequential(nn.Flatten(), nn.Linear(512, num_classes)))
+    return net
 
 
 # 设置子图的格式
@@ -505,10 +513,55 @@ def set_figsize(figsize=(3.5, 2.5)):
     plt.rcParams['figure.figsize'] = figsize
 
 
-# 从CIFAR10数据集中读取数据
+# 从CIFAR10数据集中读取数据的函数
 def load_data_from_CIFAR10(is_train, augs, batch_size):
-    dataset = torchvision.datasets.CIFAR10(root='../data', train=is_train, transform=augs, download=True)
+    dataset = torchvision.datasets.CIFAR10(root='./data', train=is_train, transform=augs, download=False)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=is_train, num_workers=4)
     return dataloader
 
-#
+
+# 多GPU mini-batch训练函数
+def train_batch_gpus(net, X, y, loss, trainer, devices):
+    if isinstance(X, list):
+        X = [x.to(devices[0]) for x in X]
+    else:
+        X = X.to(devices[0])
+    y = y.to(devices[0])
+    net.train()  # 表示模型进入训练模式
+    trainer.zero_grad()  # 梯度清零
+    pred = net(X)  # 计算y_hat
+    l = loss(pred, y)  # 计算损失
+    l.sum().backward()  # 对损失求梯度
+    trainer.step()  # 用梯度更新模型参数
+    train_loss = l.sum()
+    train_acc_sum = count_accurate(pred, y)
+    return train_loss, train_acc_sum
+
+
+# 多GPU训练函数
+def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=try_all_gpu()):
+    timer, num_batches = Timer(), len(train_iter)
+    animator = Animator(xlabel='epoch', xlim=[1, num_epochs], ylim=[0, 1],
+                        legend=['train_loss', 'train_acc', 'test_acc'])
+    net = nn.DataParallel(net, device_ids=devices).to(devices[0])
+    for epoch in range(num_epochs):
+        metric = Accumulator(4)
+        for i, (features, labels) in enumerate(train_iter):
+            timer.start()
+            l, acc = train_batch_gpus(net, features, labels, loss, trainer, devices)
+            metric.add(l, acc, labels.shape[0], labels.numel())
+            """
+            如果是分类问题，一个样本只有一个标签，这种情况下labels.shape[0]和labels.numel()没有区别
+            但是如果是多多标签分类问题，即一个样本有多个标签，那numel就会多于shape[0]
+            """
+            timer.stop()
+            if (i + 1) % (num_batches // 5) == 0 or i == num_batches - 1:
+                animator.add(epoch + (i + 1) / num_batches, (metric[0] / metric[2], metric[1] / metric[3], None))
+                """
+                计算平均损失率：总的损失/样本个数
+                计算训练正确率：正确的预测标签个数/总的预测标签个数
+                """
+        test_acc = evaluate_accuracy_gpu(net, test_iter)
+        animator.add(epoch + 1, (None, None, test_acc))
+    print(f'loss {metric[0] / metric[2]:.3f}, train_acc {metric[1] / metric[3]:.3f}, test_acc {test_acc:.3f}')
+    print((f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec on ', f'{str(devices)}'))
