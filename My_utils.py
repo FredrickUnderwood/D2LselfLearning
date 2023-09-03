@@ -565,3 +565,19 @@ def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=tr
         animator.add(epoch + 1, (None, None, test_acc))
     print(f'loss {metric[0] / metric[2]:.3f}, train_acc {metric[1] / metric[3]:.3f}, test_acc {test_acc:.3f}')
     print((f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec on ', f'{str(devices)}'))
+
+
+# 使用预训练参数进行训练的函数
+def train_fine_tuning(net, train_iter, test_iter, trainer, num_epochs, learning_rate, param_group=True,
+                      devices=try_all_gpu()):
+    loss = nn.CrossEntropyLoss(reduction='none')
+    if param_group:
+        param_1x = [param for name, param in net.named_parameters() if
+                    name not in ['fc.weight', 'fc.bias']]  # net.named_parameters()返回每一层的变量名和变量的值
+        trainer = trainer([{'params': param_1x},
+                           {'params': net.fc.parameters(),
+                            'lr': learning_rate * 10}],
+                          lr=learning_rate, weight_decay=0.001)
+    else:
+        trainer = trainer(net.parameters(), lr=learning_rate, weight_decay=0.001)
+    train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices)

@@ -1,4 +1,6 @@
-*.jpg *.svg
+*.jpg
+*.svg
+*.csv
 /data
 /img
 /hotdog
