@@ -544,6 +544,7 @@ def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=tr
     animator = Animator(xlabel='epoch', xlim=[1, num_epochs], ylim=[0, 5.0],
                         legend=['train_loss', 'train_acc', 'test_acc'])
     net = nn.DataParallel(net, device_ids=devices).to(devices[0])
+    best_test_acc =0
     for epoch in range(num_epochs):
         metric = Accumulator(4)
         for i, (features, labels) in enumerate(train_iter):
@@ -563,6 +564,8 @@ def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=tr
                 """
         test_acc = evaluate_accuracy_gpu(net, test_iter)
         animator.add(epoch + 1, (None, None, test_acc))
+        if test_acc > best_test_acc:
+            torch.save(net.state_dict(), './pre_res_model.ckpt')
     print(f'loss {metric[0] / metric[2]:.3f}, train_acc {metric[1] / metric[3]:.3f}, test_acc {test_acc:.3f}')
     print((f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec on ', f'{str(devices)}'))
 
