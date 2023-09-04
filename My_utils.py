@@ -541,7 +541,7 @@ def train_batch_gpus(net, X, y, loss, trainer, devices):
 # 多GPU训练函数
 def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=try_all_gpu()):
     timer, num_batches = Timer(), len(train_iter)
-    animator = Animator(xlabel='epoch', xlim=[1, num_epochs], ylim=[0, 1],
+    animator = Animator(xlabel='epoch', xlim=[1, num_epochs], ylim=[0, 5.0],
                         legend=['train_loss', 'train_acc', 'test_acc'])
     net = nn.DataParallel(net, device_ids=devices).to(devices[0])
     for epoch in range(num_epochs):
@@ -568,7 +568,8 @@ def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=tr
 
 
 # 使用预训练参数进行训练的函数
-def train_fine_tuning(net, train_iter, test_iter, trainer, num_epochs, learning_rate, param_group=True,
+def train_fine_tuning(net, train_iter, test_iter, trainer, num_epochs, learning_rate, model_path='./pre_res_model.ckpt',
+                      param_group=True,
                       devices=try_all_gpu()):
     loss = nn.CrossEntropyLoss(reduction='none')
     if param_group:
