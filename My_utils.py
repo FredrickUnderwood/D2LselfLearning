@@ -544,7 +544,7 @@ def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=tr
     animator = Animator(xlabel='epoch', xlim=[1, num_epochs], ylim=[0, 5.0],
                         legend=['train_loss', 'train_acc', 'test_acc'])
     net = nn.DataParallel(net, device_ids=devices).to(devices[0])
-    best_test_acc =0
+    best_test_acc = 0
     for epoch in range(num_epochs):
         metric = Accumulator(4)
         for i, (features, labels) in enumerate(train_iter):
@@ -566,6 +566,7 @@ def train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices=tr
         animator.add(epoch + 1, (None, None, test_acc))
         if test_acc > best_test_acc:
             torch.save(net.state_dict(), './pre_res_model.ckpt')
+            best_test_acc = test_acc
     print(f'loss {metric[0] / metric[2]:.3f}, train_acc {metric[1] / metric[3]:.3f}, test_acc {test_acc:.3f}')
     print((f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec on ', f'{str(devices)}'))
 
@@ -585,3 +586,37 @@ def train_fine_tuning(net, train_iter, test_iter, trainer, num_epochs, learning_
     else:
         trainer = trainer(net.parameters(), lr=learning_rate, weight_decay=0.001)
     train_gpus(net, train_iter, test_iter, loss, trainer, num_epochs, devices)
+
+
+# 物体检测与目标检测
+
+
+# 框坐标从（左上x，左上y，右下x，右下y）转为（中心x，中心y，宽度，高度）
+def box_corner_to_center(boxes):
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    center_x = (x1 + x2) / 2
+    center_y = (y1 + y2) / 2
+    w = x2 - x1
+    h = y2 - y1
+    boxes = torch.stack((center_x, center_y, w, h), axis=-1)
+    return boxes
+
+
+# 框坐标从（中心x，中心y，宽度，高度）转为（左上x，左上y，右下x，右下y）
+def box_center_to_corner(boxes):
+    """从（中间，宽度，高度）转换到（左上，右下）"""
+    center_x, center_y, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    x1 = center_x - 0.5 * w
+    y1 = center_y - 0.5 * h
+    x2 = center_x + 0.5 * w
+    y2 = center_y + 0.5 * h
+    boxes = torch.stack((x1, y1, x2, y2), axis=-1)
+    return boxes
+
+
+# 绘制框的函数
+def bbox_to_rect(bbox, color):
+    # 左上x，左上y，宽，高
+    return plt.Rectangle(
+        xy=(bbox[0], bbox[1]), width=bbox[2] - bbox[0], height=bbox[3] - bbox[1],
+        fill=False, edgecolor=color, linewidth=2)
