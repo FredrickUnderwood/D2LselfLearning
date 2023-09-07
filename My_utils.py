@@ -63,7 +63,7 @@ def show_image(imgs, row_num, col_num, titles=None, scale=1.5):
     axes = axes.flatten()
     for i, (ax, img) in enumerate(zip(axes, imgs)):  # i是图片的索引
         if torch.is_tensor(img):
-            ax.imshow(img.numpy())
+            ax.imshow(img.detach().numpy())
         else:
             ax.imshow(img)
         ax.axes.get_xaxis().set_visible(False)  # 将坐标轴设为不可见
@@ -620,3 +620,65 @@ def bbox_to_rect(bbox, color):
     return plt.Rectangle(
         xy=(bbox[0], bbox[1]), width=bbox[2] - bbox[0], height=bbox[3] - bbox[1],
         fill=False, edgecolor=color, linewidth=2)
+
+
+# 在原始图像上绘制框的函数
+def show_bbox(axes, bboxes, labels=None, colors=None):
+    """
+    :param axes: 多个子图的合集
+    :param bboxes: 边框坐标的合集
+    :param labels:
+    :param color:
+    :return:
+    """
+
+    def make_list(obj, default_values=None):
+        if obj is None:
+            obj = default_values
+        elif not isinstance(obj, (tuple, list)):
+            obj = [obj]
+        return obj
+
+    labels = make_list(labels)
+    colors = make_list(colors, ['b', 'g', 'r', 'm', 'c'])
+    for i, bbox in enumerate(bboxes):
+        color = colors[i % len(colors)]
+        rect = bbox_to_rect(bbox.detach().numpy(), color)
+        axes.add_patch(rect)
+        if labels and len(labels) > i:
+            text_color = 'k' if color == 'w' else 'w'
+            axes.text(rect.xy[0], rect.xy[1], labels[i], va='center', ha='center',
+                      fontsize=9, color=text_color, bbox=dict(facecolor=color, lw=0))
+
+
+# 生成锚框的函数
+def anchor_boxes(data, sizes, ratios):
+    img_height, img_width = data.shape[-2:]
+    device, num_sizes, num_ratios = data.device, len(sizes), len(ratios)
+    boxes_per_pixel = (num_sizes + num_ratios -1)
+    size_tensor = torch.tensor(sizes, device=device)
+    ratio_tensor = torch.tensor(ratios, device=device)
+
+    # 锚框的中心保持在像素的中心，因此设置一个偏移量0.5
+    offset_h, offset_w = 0.5, 0.5
+    steps_h, steps_w = 1 / img_height, 1 / img_width
+
+    # 生成中心坐标
+    center_h = (torch.arange(img_height, device=device) + offset_h) * steps_h
+    center_w = (torch.arange(img_width, device=device) + offset_w) * steps_w
+    shift_y, shift_x = torch.meshgrid([center_h, center_w], indexing='ij')
+    shift_y, shift_x = shift_x.reshape(-1), shift_x.reshape(-1)  # 方便后续匹配x和y
+
+    # 生成boxes_per_pixel个高和宽
+    w = torch.cat((size_tensor * torch.sqrt(ratio_tensor[0]),
+                   sizes[0] * torch.sqrt(ratio_tensor[1:]))) * img_height / img_width  # 理解不了看这个https://fkjkkll.github.io/2021/11/23/%E7%9B%AE%E6%A0%87%E6%A3%80%E6%B5%8BSSD/#more
+    h = torch.cat((size_tensor / torch.sqrt(ratio_tensor[0]),
+                   sizes[0] / torch.sqrt(ratio_tensor[1:])))
+
+    # 获得半高或者半高
+    anchor_manipulations = torch.stack((-w, -h, w, h)). \
+                               T.repeat(img_height * img_width, 1) / 2  # repeat(行上扩展的个数,列上扩展的个数)
+    out_grid = torch.stack([shift_x, shift_y, shift_x, shift_y], dim=1).\
+        repeat_interleave(boxes_per_pixel, dim=0)
+    outputs = out_grid + anchor_manipulations
+    return outputs.unsqueeze(0)
