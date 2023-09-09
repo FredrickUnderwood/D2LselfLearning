@@ -661,13 +661,14 @@ def anchor_boxes(data, sizes, ratios):
 
     # 锚框的中心保持在像素的中心，因此设置一个偏移量0.5
     offset_h, offset_w = 0.5, 0.5
-    steps_h, steps_w = 1 / img_height, 1 / img_width
+    steps_h = 1.0 / img_height
+    steps_w = 1.0 / img_width
 
     # 生成中心坐标
     center_h = (torch.arange(img_height, device=device) + offset_h) * steps_h
     center_w = (torch.arange(img_width, device=device) + offset_w) * steps_w
     shift_y, shift_x = torch.meshgrid([center_h, center_w], indexing='ij')
-    shift_y, shift_x = shift_x.reshape(-1), shift_x.reshape(-1)  # 方便后续匹配x和y
+    shift_y, shift_x = shift_y.reshape(-1), shift_x.reshape(-1)  # 方便后续匹配x和y
 
     # 生成boxes_per_pixel个高和宽
     w = torch.cat((size_tensor * torch.sqrt(ratio_tensor[0]),
@@ -682,3 +683,39 @@ def anchor_boxes(data, sizes, ratios):
         repeat_interleave(boxes_per_pixel, dim=0)
     outputs = out_grid + anchor_manipulations
     return outputs.unsqueeze(0)
+
+
+# 计算两个锚框或边界框列表中成对的交并比
+def box_iou(boxes1, boxes2):
+    box_area = lambda boxes: ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]))
+    area1 = box_area(boxes1)
+    area2 = box_area(boxes2)
+    upper_left_coordinate = torch.max(boxes1[:, None, :2], boxes2[:, :2])
+    """
+    假设 `boxes1` 的形状为 (N, 4)，表示 N 个边界框，每个框有 4 个坐标；`boxes2` 的形状为 (M, 4)，表示 M 个边界框。
+    为了比较 `boxes1` 中的每个框与 `boxes2` 中的每个框，我们需要一个形状为 (N, M, 4) 的输出张量。
+    通过增加一个维度，例如执行 `boxes1[:, None, :]`，我们将 `boxes1` 的形状从 (N, 4) 更改为 (N, 1, 4)。
+    由于 `boxes2` 的形状为 (M, 4)，当我们应用广播规则时，`boxes1` 和 `boxes2` 都将被视为形状 (N, M, 4)。
+    这样，我们可以在这两组框之间进行元素级的操作，例如寻找交集的左上角和右下角坐标。
+    """
+    lower_right_coordinate = torch.min(boxes1[:, None, :2], boxes2[:, :2])
+    inters = (lower_right_coordinate - upper_left_coordinate).clamp(min=0)
+    """
+    如果有交集，lower_right_coordinate的横纵坐标一定大于upper_left_coordinate的横纵坐标
+    clamp()函数将两坐标相减后小于0（没交集）的部分置为0
+    """
+    inter_areas = inters[:, :, 0] * inters[:, :, 1]
+    union_areas = area1[:, None] + area2 - inter_areas
+    return inter_areas / union_areas
+
+
+# 在数据集中将ground-truth bbox的标记框分配给锚框
+def assign_anchor_to_bbox(ground_truth, anchors, device, iou_threshold=0.5):
+    num_anchors, num_gt_boxes = anchors.shape[0], ground_truth.shape[0]
+    jaccard = box_iou(anchors, ground_truth)
+    anchors_bbox_map = torch.full((num_anchors, ), -1, dtype=torch.long, device=device)
+    max_ious, indices = torch.max(jaccard, dim=1)  # 第1维是ground-truth的维度，所以选出每个ground-truth对应的iou最大的anchor
+    anc_i = torch.nonzero(max_ious >= iou_threshold).reshape(-1)  # nonzero返回tensor中非零的坐标
+    box_j = indices[max_ious >= iou_threshold]
+    anchors_bbox_map[anc_i] = box_j
+
