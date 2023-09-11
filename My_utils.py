@@ -655,7 +655,7 @@ def show_bbox(axes, bboxes, labels=None, colors=None):
 def anchor_boxes(data, sizes, ratios):
     img_height, img_width = data.shape[-2:]
     device, num_sizes, num_ratios = data.device, len(sizes), len(ratios)
-    boxes_per_pixel = (num_sizes + num_ratios -1)
+    boxes_per_pixel = (num_sizes + num_ratios - 1)
     size_tensor = torch.tensor(sizes, device=device)
     ratio_tensor = torch.tensor(ratios, device=device)
 
@@ -672,14 +672,15 @@ def anchor_boxes(data, sizes, ratios):
 
     # 生成boxes_per_pixel个高和宽
     w = torch.cat((size_tensor * torch.sqrt(ratio_tensor[0]),
-                   sizes[0] * torch.sqrt(ratio_tensor[1:]))) * img_height / img_width  # 理解不了看这个https://fkjkkll.github.io/2021/11/23/%E7%9B%AE%E6%A0%87%E6%A3%80%E6%B5%8BSSD/#more
+                   sizes[0] * torch.sqrt(ratio_tensor[
+                                         1:]))) * img_height / img_width  # 理解不了看这个https://fkjkkll.github.io/2021/11/23/%E7%9B%AE%E6%A0%87%E6%A3%80%E6%B5%8BSSD/#more
     h = torch.cat((size_tensor / torch.sqrt(ratio_tensor[0]),
                    sizes[0] / torch.sqrt(ratio_tensor[1:])))
 
     # 获得半高或者半高
     anchor_manipulations = torch.stack((-w, -h, w, h)). \
                                T.repeat(img_height * img_width, 1) / 2  # repeat(行上扩展的个数,列上扩展的个数)
-    out_grid = torch.stack([shift_x, shift_y, shift_x, shift_y], dim=1).\
+    out_grid = torch.stack([shift_x, shift_y, shift_x, shift_y], dim=1). \
         repeat_interleave(boxes_per_pixel, dim=0)
     outputs = out_grid + anchor_manipulations
     return outputs.unsqueeze(0)
@@ -698,7 +699,7 @@ def box_iou(boxes1, boxes2):
     由于 `boxes2` 的形状为 (M, 4)，当我们应用广播规则时，`boxes1` 和 `boxes2` 都将被视为形状 (N, M, 4)。
     这样，我们可以在这两组框之间进行元素级的操作，例如寻找交集的左上角和右下角坐标。
     """
-    lower_right_coordinate = torch.min(boxes1[:, None, :2], boxes2[:, :2])
+    lower_right_coordinate = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])
     inters = (lower_right_coordinate - upper_left_coordinate).clamp(min=0)
     """
     如果有交集，lower_right_coordinate的横纵坐标一定大于upper_left_coordinate的横纵坐标
@@ -713,9 +714,72 @@ def box_iou(boxes1, boxes2):
 def assign_anchor_to_bbox(ground_truth, anchors, device, iou_threshold=0.5):
     num_anchors, num_gt_boxes = anchors.shape[0], ground_truth.shape[0]
     jaccard = box_iou(anchors, ground_truth)
-    anchors_bbox_map = torch.full((num_anchors, ), -1, dtype=torch.long, device=device)
+    anchors_bbox_map = torch.full((num_anchors,), -1, dtype=torch.long, device=device)
     max_ious, indices = torch.max(jaccard, dim=1)  # 第1维是ground-truth的维度，所以选出每个ground-truth对应的iou最大的anchor
     anc_i = torch.nonzero(max_ious >= iou_threshold).reshape(-1)  # nonzero返回tensor中非零的坐标
     box_j = indices[max_ious >= iou_threshold]
     anchors_bbox_map[anc_i] = box_j
+    col_discard = torch.full((num_anchors,), -1)  # 清空一个列要N行个-1
+    row_discard = torch.full((num_gt_boxes,), -1)
+    for _ in range(num_gt_boxes):
+        max_idx = torch.argmax(jaccard)  # 返回这个tensor的最大值是第几个
+        box_idx = (max_idx % num_gt_boxes).long()  # 纵坐标
+        anc_idx = (max_idx / num_gt_boxes).long()  # 横坐标
+        anchors_bbox_map[anc_idx] = box_idx
+        jaccard[:, box_idx] = col_discard
+        jaccard[anc_idx, :] = row_discard
+    return anchors_bbox_map
 
+
+# 计算锚框和ground-truth的偏移量
+def offset_boxes(anchors, assigned_bboxes, eps=1e-6):
+    c_anc = box_corner_to_center(anchors)
+    c_assigned_bboxes = box_corner_to_center(assigned_bboxes)
+    offset_xy = 10 * (c_assigned_bboxes[:, :2] - c_anc[:, :2]) / c_anc[:, 2:]
+    offset_wh = 5 * torch.log(eps + c_assigned_bboxes[:, 2:] / c_anc[:, 2:])
+    offset = torch.cat([offset_xy, offset_wh], axis=1)
+    return offset
+
+
+# 给锚框标记label
+def multi_box_labels(anchors, labels):
+    # labels是一个类似迭代器的，由多个batch，每个batch里多个label组成
+    # labels的第三维(object的索引值, 四个坐标)
+    batch_size, anchors = labels.shape[0], anchors.squeeze(0)  # 如果第0维的size是1，将第0维去掉
+    batch_offset, batch_mask, batch_class_labels = [], [], []
+    device, num_anchors = anchors.device, anchors.shape[0]
+    for i in range(batch_size):
+        label = labels[i, :, :]  # 取出第i个batch的labels
+        anchors_bbox_map = assign_anchor_to_bbox(label[:, 1:], anchors, device)  # label第0维是分类的类别，即object的索引值
+        bbox_mask = (anchors_bbox_map >= 0).float().unsqueeze(-1).repeat(1, 4)  # 第一维数量不变，第二维数量变为四倍
+
+        class_labels = torch.zeros(num_anchors, dtype=torch.long, device=device)
+        assigned_bboxes = torch.zeros((num_anchors, 4), dtype=torch.float32, device=device)
+
+        indices_true = torch.nonzero(anchors_bbox_map >= 0)  # 返回值大于等于0的index
+        bboxes_idx = anchors_bbox_map[indices_true]  # 给分配了的锚框，分配的ground-truth标记框
+        class_labels[indices_true] = label[bboxes_idx, 0].long() + 1  # 取出对应的object的索引值
+        assigned_bboxes[indices_true] = label[bboxes_idx, 1:]  # 取出对应的ground-truth框的坐标
+        offset = offset_boxes(anchors, assigned_bboxes) * bbox_mask  # 为0的算作背景，offset就为0
+
+        batch_offset.append(offset.reshape(-1))
+        batch_mask.append(bbox_mask.reshape(-1))
+        batch_class_labels.append(class_labels)
+    bbox_offset = torch.stack(batch_offset)
+    bbox_mask = torch.stack(batch_mask)
+    class_labels = torch.stack(batch_class_labels)
+    return (bbox_offset, bbox_mask, class_labels)
+
+
+# 通过锚框和锚框的偏移量来预测边界框
+def offset_inverse(anchors, offset_pred):
+    anc = box_corner_to_center(anchors)
+    pred_bbox_xy = (offset_pred[:, :2] * anc[:, 2:] / 10) + anc[:, :2]
+    pred_bbox_wh = torch.exp(offset_pred[:, 2:] / 5) * anc[:, 2:]
+    pred_bbox = torch.cat([pred_bbox_xy, pred_bbox_wh], axis=1)
+    predicted_bbox = box_center_to_corner(pred_bbox)
+    return predicted_bbox
+
+
+# 对边界框置信度进行排序
+def nms
