@@ -781,5 +781,53 @@ def offset_inverse(anchors, offset_pred):
     return predicted_bbox
 
 
-# 对边界框置信度进行排序
-def nms
+# 对边界框置信度进行排序，以及非极大抑制的实现
+def nms(boxes, scores, iou_threshold):
+    # boxes中的内容已经是分配过且不为背景的边框了
+    B = torch.argsort(scores, dim=-1, descending=True)
+    keep = []
+    while B.numel() > 0:
+        i = B[0]
+        keep.append(i)
+        if B.numel == 1:
+            break
+        iou = box_iou(boxes[i, :].reshape(-1, 4), boxes[B[1:], :].reshape(-1, 4)).reshape(-1)
+        indexes = torch.nonzero(iou <= iou_threshold).reshape(-1)
+        B = B[indexes + 1]  # B[1:]开始计数，因此indexes要+1
+    return torch.tensor(keep, device=boxes.device)
+
+
+# 使用非极大抑制来预测边界框
+def multi_box_predictions(class_probs, offset_preds, anchors, nms_threshold=0.5, pos_threshold=0.009999999):
+    device, batch_size = class_probs.device, class_probs.shape[0]
+    anchors = anchors.squeeze(0)
+    num_classes, num_anchors = class_probs.shape[1], class_probs.shape[2]
+    """
+    class_prob这个tensor每一行代表一个类别，每一列是每个anchor对应是该类的概率 
+    """
+    out = []
+    for i in range(batch_size):
+        class_prob, offset_pred = class_probs[i], offset_preds[i].reshape(-1, 4)  # 取出第i个batch
+        conf, class_id = torch.max(class_prob[1:], 0)
+        """
+        [1:]用来屏蔽背景类，conf接收的是每个anchor预测率最高的类别，class_id接收的是对应的行号，也就是对应的类别id
+        """
+        predicted_bbox = offset_inverse(anchors, offset_pred)
+        keep = nms(predicted_bbox, conf, nms_threshold)  # 通过nms筛选出需要保留的anchors
+
+        # 对id进行排序，将不保留的anchors的idx排到后面
+        all_idx = torch.arange(num_anchors, dtype=torch.long, device=device)
+        combined = torch.cat((keep, all_idx))
+        uniques, counts = combined.unique(return_counts=True)
+        non_keep = uniques[counts == 1]
+        all_id_sorted = torch.cat((keep, non_keep))
+
+        class_id[non_keep] = -1  # 将不保留的anchors替换成背景类
+        class_id = class_id[all_id_sorted]  # 对class_id进行重新排序
+        conf, predicted_bbox = conf[all_id_sorted], predicted_bbox[all_id_sorted]  # 重新排序
+        below_min_idx = (conf < pos_threshold)  # 对非背景类进行检查，如果低于阈值也标为背景
+        class_id[below_min_idx] = -1
+        conf[below_min_idx] = 1 - conf[below_min_idx]
+        pred_info = torch.cat((class_id.unsqueeze(1), conf.unsqueeze(1), predicted_bbox), dim=1)
+        out.append(pred_info)
+    return out
