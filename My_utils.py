@@ -831,3 +831,38 @@ def multi_box_predictions(class_probs, offset_preds, anchors, nms_threshold=0.5,
         pred_info = torch.cat((class_id.unsqueeze(1), conf.unsqueeze(1), predicted_bbox), dim=1)
         out.append(pred_info)
     return out
+
+
+# 预测锚框类型的函数
+def class_predictor(num_inputs, num_anchors, num_classes):
+    return nn.Conv2d(num_inputs, num_anchors * (num_classes + 1), kernel_size=3, padding=1)
+
+
+# 预测边框的函数
+def bounding_box_predictor(num_inputs, num_anchors):
+    # 预测的是每个锚框的offset，offset是四个变量，因此输出量要*4
+    return nn.Conv2d(num_inputs, num_anchors * 4, kernel_size=3, padding=1)
+
+
+# 将预测值拉平的函数
+def flatten_pred(pred):
+    return torch.flatten(pred.permute(0, 2, 3, 1), start_dim=1)
+
+
+# 将预测组合的函数
+def concat_preds(preds):
+    return torch.cat([flatten_pred(p) for p in preds], dim=1)
+
+
+# 高和宽减半的块
+def down_sample_blk(in_channels, out_channels):
+    blk = []
+    for _ in range(2):
+        blk.append(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        )
+        blk.append(nn.BatchNorm2d(out_channels))
+        blk.append(nn.ReLU())
+        in_channels = out_channels
+    blk.append(nn.MaxPool2d(2))
+    return nn.Sequential(*blk)
