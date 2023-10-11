@@ -5,3 +5,5 @@
 /img
 /hotdog
 /banana-detection
+*.pth
+*.ckpt
