@@ -1,9 +1,9 @@
 *.jpg
 *.svg
 *.csv
-/data
-/img
-/hotdog
-/banana-detection
+/D2L/data
+/D2L/img
+/D2L/hotdog
+/D2L/banana-detection
 *.pth
 *.ckpt
