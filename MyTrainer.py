@@ -16,17 +16,34 @@ class MyTrainer:
         return float(correct_count)
 
     def __init__(self, optimizer, model, criterion, train_dataloader, valid_dataloader,
-                 learning_rate, num_epochs, devices, out_classes, param_group=True):
+                 learning_rate, num_epochs, devices, out_classes, mode='cross-valid', fine_tune: bool = True):
+        """
+        :param optimizer: the optimizer to use e.g. SGD, Adam
+        :param model: the model to train e.g. EfficientNetB4, ResNet18
+        :param criterion: loss function e.g. CrossEntropyLoss
+        :param train_dataloader: training iterator e.g. torch.utils.data.DataLoader
+        :param valid_dataloader: validation iterator e.g. torch.utils.data.DataLoader
+        :param learning_rate: lr
+        :param num_epochs: how many epochs to train the model
+        :param devices: devices_list to train
+        :param out_classes: number of output classes
+        :param mode: training mode in ['cross-valid', 'full_data']
+        :param fine_tune: whether trainer is for fine-tuning
+        """
         self.optimizer_class = optimizer
         self.model = model
         self.criterion = criterion
         self.devices = devices
         self.train_dataloader = train_dataloader
         self.valid_dataloader = valid_dataloader
-        self.param_group = param_group
+        self.fine_tune = fine_tune
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
         self.out_classes = out_classes
+        self.mode = mode
+        mode_list = ['cross_valid', 'full_data']
+        if self.mode not in mode_list:
+            raise ValueError(f'Invalid training mode, valid mode name is {self.mode}')
 
     def calc_valid_acc(self):
         self.model.eval()
@@ -85,7 +102,12 @@ class MyTrainer:
         self.model = nn.DataParallel(self.model, device_ids=self.devices).to(self.devices[0])
         for epoch in range(self.num_epochs):
             train_loss, train_acc = MyTrainer.train_epoch(self, epoch)
-            valid_acc = MyTrainer.calc_valid_acc(self)
-            if valid_acc > best_valid_acc:
-                torch.save(self.model.state_dict(), os.path.join('best_model.pth'))
-            print(f'epoch{epoch + 1}:train_loss:{train_loss}, train_acc:{train_acc}, valid_acc:{valid_acc}')
+            if self.mode == 'cross_valid':
+                valid_acc = MyTrainer.calc_valid_acc(self)
+                if valid_acc > best_valid_acc:
+                    torch.save(self.model.state_dict(), os.path.join('best_model.pth'))
+                print(f'epoch{epoch + 1}:train_loss:{train_loss}, train_acc:{train_acc}, valid_acc:{valid_acc}')
+            elif self.mode == 'full_data':
+                if epoch == self.num_epochs - 1:
+                    torch.save(self.model.state_dict(), os.path.join('best_model.pth'))
+                print(f'epoch{epoch + 1}:train_loss:{train_loss}, train_acc:{train_acc}')
