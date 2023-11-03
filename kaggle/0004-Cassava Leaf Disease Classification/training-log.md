@@ -18,3 +18,8 @@
 
 
 
+**ver1103 B4NS + ResNeXt50 + TinyViT + CropNet**
+
+| version   | private LB | public LB | model_arch |
+| --------- | ---------- | --------- | ---------- |
+| version17 |            |           |            |
