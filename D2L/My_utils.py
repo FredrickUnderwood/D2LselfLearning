@@ -592,6 +592,7 @@ def train_fine_tuning(net, train_iter, test_iter, trainer, num_epochs, learning_
 
 
 # 框坐标从（左上x，左上y，右下x，右下y）转为（中心x，中心y，宽度，高度）
+# 由于y轴从上到下增大，因此左上角的值对应的y值更小
 def box_corner_to_center(boxes):
     x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
     center_x = (x1 + x2) / 2
@@ -619,7 +620,7 @@ def bbox_to_rect(bbox, color):
     # 左上x，左上y，宽，高
     return plt.Rectangle(
         xy=(bbox[0], bbox[1]), width=bbox[2] - bbox[0], height=bbox[3] - bbox[1],
-        fill=False, edgecolor=color, linewidth=2)
+        fill=False, edgecolor=color, linewidth=2)  # plt.Rectangle 的xy对应的是矩形的左上角坐标
 
 
 # 在原始图像上绘制框的函数
@@ -651,9 +652,9 @@ def show_bbox(axes, bboxes, labels=None, colors=None):
                       fontsize=9, color=text_color, bbox=dict(facecolor=color, lw=0))
 
 
-# 生成锚框的函数
+# 生成锚框的函数，生成的锚框与图片具体的宽与高无关，在特征图上生成
 def anchor_boxes(data, sizes, ratios):
-    img_height, img_width = data.shape[-2:]
+    img_height, img_width = data.shape[-2:]  # 4, 4
     device, num_sizes, num_ratios = data.device, len(sizes), len(ratios)
     boxes_per_pixel = (num_sizes + num_ratios - 1)
     size_tensor = torch.tensor(sizes, device=device)
@@ -665,7 +666,7 @@ def anchor_boxes(data, sizes, ratios):
     steps_w = 1.0 / img_width
 
     # 生成中心坐标
-    center_h = (torch.arange(img_height, device=device) + offset_h) * steps_h
+    center_h = (torch.arange(img_height, device=device) + offset_h) * steps_h  # 0.125 0.375 0.625 0.875
     center_w = (torch.arange(img_width, device=device) + offset_w) * steps_w
     shift_y, shift_x = torch.meshgrid([center_h, center_w], indexing='ij')
     shift_y, shift_x = shift_y.reshape(-1), shift_x.reshape(-1)  # 方便后续匹配x和y
