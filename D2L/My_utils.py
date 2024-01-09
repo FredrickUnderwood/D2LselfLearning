@@ -745,7 +745,7 @@ def offset_boxes(anchors, assigned_bboxes, eps=1e-6):
 # 给锚框标记label
 def multi_box_labels(anchors, labels):
     # labels是一个类似迭代器的，由多个batch，每个batch里多个label组成
-    # labels的第三维(object的索引值, 四个坐标)
+    # labels的第三维第一个值代表的是该bbox对应的类型，后四个值代表的是该bbox的坐标
     batch_size, anchors = labels.shape[0], anchors.squeeze(0)  # 如果第0维的size是1，将第0维去掉
     batch_offset, batch_mask, batch_class_labels = [], [], []
     device, num_anchors = anchors.device, anchors.shape[0]
@@ -753,7 +753,6 @@ def multi_box_labels(anchors, labels):
         label = labels[i, :, :]  # 取出第i个batch的labels
         anchors_bbox_map = assign_anchor_to_bbox(label[:, 1:], anchors, device)  # label第0维是分类的类别，即object的索引值
         bbox_mask = (anchors_bbox_map >= 0).float().unsqueeze(-1).repeat(1, 4)  # 第一维数量不变，第二维数量变为四倍
-
         class_labels = torch.zeros(num_anchors, dtype=torch.long, device=device)
         assigned_bboxes = torch.zeros((num_anchors, 4), dtype=torch.float32, device=device)
 
