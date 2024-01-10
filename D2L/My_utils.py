@@ -652,7 +652,7 @@ def show_bbox(axes, bboxes, labels=None, colors=None):
                       fontsize=9, color=text_color, bbox=dict(facecolor=color, lw=0))
 
 
-# 生成锚框的函数，生成的锚框与图片具体的宽与高无关，在特征图上生成
+# 生成锚框的函数，在特征图上生成，因此输入的data是特征图
 def anchor_boxes(data, sizes, ratios):
     img_height, img_width = data.shape[-2:]  # 4, 4
     device, num_sizes, num_ratios = data.device, len(sizes), len(ratios)
@@ -784,6 +784,7 @@ def offset_inverse(anchors, offset_pred):
 # 对边界框置信度进行排序，以及非极大抑制的实现
 def nms(boxes, scores, iou_threshold):
     # boxes中的内容已经是分配过且不为背景的边框了
+    # scores每个列对应一个锚框，每一行对应的是某个label的预测
     B = torch.argsort(scores, dim=-1, descending=True)
     keep = []
     while B.numel() > 0:
@@ -792,8 +793,8 @@ def nms(boxes, scores, iou_threshold):
         if B.numel == 1:
             break
         iou = box_iou(boxes[i, :].reshape(-1, 4), boxes[B[1:], :].reshape(-1, 4)).reshape(-1)
-        indexes = torch.nonzero(iou <= iou_threshold).reshape(-1)
-        B = B[indexes + 1]  # B[1:]开始计数，因此indexes要+1
+        indices = torch.nonzero(iou <= iou_threshold).reshape(-1)
+        B = B[indices + 1]  # B[1:]开始计数，因此index要+1
     return torch.tensor(keep, device=boxes.device)
 
 
@@ -810,7 +811,7 @@ def multi_box_predictions(class_probs, offset_preds, anchors, nms_threshold=0.5,
         class_prob, offset_pred = class_probs[i], offset_preds[i].reshape(-1, 4)  # 取出第i个batch
         conf, class_id = torch.max(class_prob[1:], 0)
         """
-        [1:]用来屏蔽背景类，conf接收的是每个anchor预测率最高的类别，class_id接收的是对应的行号，也就是对应的类别id
+        [1:]用来屏蔽背景类，conf接收的是每个anchor预测率最高的概率，class_id接收的是对应的行号，也就是对应的类别id
         """
         predicted_bbox = offset_inverse(anchors, offset_pred)
         keep = nms(predicted_bbox, conf, nms_threshold)  # 通过nms筛选出需要保留的anchors
@@ -831,38 +832,3 @@ def multi_box_predictions(class_probs, offset_preds, anchors, nms_threshold=0.5,
         pred_info = torch.cat((class_id.unsqueeze(1), conf.unsqueeze(1), predicted_bbox), dim=1)
         out.append(pred_info)
     return out
-
-
-# 预测锚框类型的函数
-def class_predictor(num_inputs, num_anchors, num_classes):
-    return nn.Conv2d(num_inputs, num_anchors * (num_classes + 1), kernel_size=3, padding=1)
-
-
-# 预测边框的函数
-def bounding_box_predictor(num_inputs, num_anchors):
-    # 预测的是每个锚框的offset，offset是四个变量，因此输出量要*4
-    return nn.Conv2d(num_inputs, num_anchors * 4, kernel_size=3, padding=1)
-
-
-# 将预测值拉平的函数
-def flatten_pred(pred):
-    return torch.flatten(pred.permute(0, 2, 3, 1), start_dim=1)
-
-
-# 将预测组合的函数
-def concat_preds(preds):
-    return torch.cat([flatten_pred(p) for p in preds], dim=1)
-
-
-# 高和宽减半的块
-def down_sample_blk(in_channels, out_channels):
-    blk = []
-    for _ in range(2):
-        blk.append(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        )
-        blk.append(nn.BatchNorm2d(out_channels))
-        blk.append(nn.ReLU())
-        in_channels = out_channels
-    blk.append(nn.MaxPool2d(2))
-    return nn.Sequential(*blk)
