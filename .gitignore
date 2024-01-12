@@ -7,3 +7,4 @@
 /D2L/banana-detection
 *.pth
 *.ckpt
+/D2L/VOCdevkit

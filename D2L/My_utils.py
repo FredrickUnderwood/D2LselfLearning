@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torchvision import transforms
 import torchvision
+from torchvision.transforms import v2
 from torch.utils import data
 from matplotlib_inline import backend_inline
 import matplotlib.pyplot as plt
@@ -10,6 +11,7 @@ import time
 import numpy
 from torch import nn
 from torch.nn import functional as F
+import os
 
 
 # 生成人工数据集
@@ -644,7 +646,7 @@ def show_bbox(axes, bboxes, labels=None, colors=None):
     colors = make_list(colors, ['b', 'g', 'r', 'm', 'c'])
     for i, bbox in enumerate(bboxes):
         color = colors[i % len(colors)]
-        rect = bbox_to_rect(bbox.detach().numpy(), color)
+        rect = bbox_to_rect(bbox.cpu().detach().numpy(), color)
         axes.add_patch(rect)
         if labels and len(labels) > i:
             text_color = 'k' if color == 'w' else 'w'
@@ -742,7 +744,7 @@ def offset_boxes(anchors, assigned_bboxes, eps=1e-6):
     return offset
 
 
-# 给锚框标记label
+# 给锚框标记label，生成具体的偏移量、mask和label
 def multi_box_labels(anchors, labels):
     # labels是一个类似迭代器的，由多个batch，每个batch里多个label组成
     # labels的第三维第一个值代表的是该bbox对应的类型，后四个值代表的是该bbox的坐标
@@ -751,8 +753,8 @@ def multi_box_labels(anchors, labels):
     device, num_anchors = anchors.device, anchors.shape[0]
     for i in range(batch_size):
         label = labels[i, :, :]  # 取出第i个batch的labels
-        anchors_bbox_map = assign_anchor_to_bbox(label[:, 1:], anchors, device)  # label第0维是分类的类别，即object的索引值
-        bbox_mask = (anchors_bbox_map >= 0).float().unsqueeze(-1).repeat(1, 4)  # 第一维数量不变，第二维数量变为四倍
+        anchors_bbox_map = assign_anchor_to_bbox(label[:, 1:], anchors, device)  # label第2维的第0个参数是分类的类别，即object的索引值
+        bbox_mask = ((anchors_bbox_map >= 0).float().unsqueeze(-1)).repeat(1, 4)  # 第一维数量不变，第二维数量变为四倍
         class_labels = torch.zeros(num_anchors, dtype=torch.long, device=device)
         assigned_bboxes = torch.zeros((num_anchors, 4), dtype=torch.float32, device=device)
 
@@ -832,3 +834,84 @@ def multi_box_predictions(class_probs, offset_preds, anchors, nms_threshold=0.5,
         pred_info = torch.cat((class_id.unsqueeze(1), conf.unsqueeze(1), predicted_bbox), dim=1)
         out.append(pred_info)
     return out
+
+
+# 语义分割
+
+
+# voc对应RGB值
+VOC_COLORMAP = [[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
+                [0, 0, 128], [128, 0, 128], [0, 128, 128], [128, 128, 128],
+                [64, 0, 0], [192, 0, 0], [64, 128, 0], [192, 128, 0],
+                [64, 0, 128], [192, 0, 128], [64, 128, 128], [192, 128, 128],
+                [0, 64, 0], [128, 64, 0], [0, 192, 0], [128, 192, 0],
+                [0, 64, 128]]
+
+# voc类别
+VOC_CLASSES = ['background', 'aeroplane', 'bicycle', 'bird', 'boat',
+               'bottle', 'bus', 'car', 'cat', 'chair', 'cow',
+               'diningtable', 'dog', 'horse', 'motorbike', 'person',
+               'potted plant', 'sheep', 'sofa', 'train', 'tv/monitor']
+
+
+# 读取voc图像并标注
+def read_voc_images(voc_dir, is_train=True):
+    txt_fname = os.path.join(voc_dir, 'ImageSets', 'Segmentation', 'train.txt' if is_train else 'val.txt')
+    mode = torchvision.io.image.ImageReadMode.RGB
+    with open(txt_fname, 'r') as f:
+        images = f.read().split()
+    features, labels = [], []
+    for i, fname in enumerate(images):
+        features.append(torchvision.io.read_image(os.path.join(voc_dir, 'JPEGImages', f'{fname}.jpg')))
+        labels.append(torchvision.io.read_image(os.path.join(voc_dir, 'SegmentationClass', f'{fname}.png'), mode))
+    return features, labels
+
+
+# 构建RGB到voc类别索引的映射
+def voc_colormap2label():
+    colormap2label = torch.zeros(256 ** 3, dtype=torch.long)
+    for i, colormap in enumerate(VOC_COLORMAP):
+        colormap2label[(colormap[0] * 256 + colormap[1]) * 256 + colormap[2]] = i
+    return colormap2label
+
+
+# 将RGB值映射到voc类别索引
+def voc_label_indices(colormap, colormap2label):
+    # colormap的值就是一张图上每个pixel对应的RGB值
+    colormap = colormap.permute(1, 2, 0).numpy().astype('int32')
+    idx = ((colormap[:, :, 0] * 256 + colormap[:, :, 1]) * 256 + colormap[:, :, 2])
+    return colormap2label[idx]
+
+
+# 随机裁剪特征和标签图片
+def voc_and_crop(feature, label, height, width):
+    rect = torchvision.transforms.RandomCrop.get_params(feature, (height, width))
+    feature = v2.functional.crop(feature, *rect)
+    label = v2.functional.crop(label, *rect)
+    return feature, label
+
+
+# voc数据集
+class VOCSegDataset(torch.utils.data.Dataset):
+    def __init__(self, is_train, crop_size, voc_dir):
+        self.transform = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.crop_size = crop_size
+        features, labels = read_voc_images(voc_dir, is_train)
+        self.features = [self.normalize_image(feature) for feature in self.filter(features
+                                                                                  )]
+        self.labels = self.filter(labels)
+        self.colormap2label = voc_colormap2label()
+
+        print(f'read {str(len(self.features))} examples')
+
+    def normalize_image(self, img):
+        return self.transform(img.float() / 255)
+
+    def filter(self, imgs):
+        return [img for img in imgs if (img.shape[1] >= self.crop_size[0] and img.shape[2] >= self.crop_size[1])]
+
+    def __getitem__(self, idx):
+        feature, label = voc_and_crop(self.features[idx], self.labels[idx], *self.crop_size)
+
+    def __len__(self):
+        return len(self.features)
