@@ -912,6 +912,7 @@ class VOCSegDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         feature, label = voc_and_crop(self.features[idx], self.labels[idx], *self.crop_size)
+        return (feature, voc_label_indices(label, self.colormap2label))
 
     def __len__(self):
         return len(self.features)
