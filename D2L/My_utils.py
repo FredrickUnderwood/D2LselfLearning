@@ -8,10 +8,12 @@ from matplotlib_inline import backend_inline
 import matplotlib.pyplot as plt
 from IPython import display
 import time
-import numpy
 from torch import nn
 from torch.nn import functional as F
 import os
+import collections
+import random
+import re
 
 
 # 生成人工数据集
@@ -916,3 +918,128 @@ class VOCSegDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.features)
+
+
+# 语言模型
+
+
+# 将一行一行的文字转成一个一个单词
+def tokenize(lines, token='word'):
+    if token == 'word':
+        return [line.split() for line in lines]
+    elif token == 'char':
+        return [list(line) for line in lines]
+    else:
+        print('ERROR: unknown token:', token)
+
+
+# 统计每个token出现的频率
+def count_corpus(tokens):
+    if len(tokens) == 0 or isinstance(tokens[0], list):
+        tokens = [token for line in tokens for token in line]
+    return collections.Counter(tokens)
+
+
+# 文本语料库
+class Vocab:
+    def __init__(self, tokens=None, min_freq=0, reversed_tokens=None):
+        if tokens is None:
+            tokens = []
+        if reversed_tokens is None:
+            reversed_tokens = []
+        counter = count_corpus(tokens)
+        self._token_freqs = sorted(counter.items(), key=lambda x: x[1], reverse=True)
+        self.idx_to_token = ['<unk>'] + reversed_tokens
+        self.token_to_idx = {token: idx for idx, token in enumerate(self.idx_to_token)}
+        for token, freq in self._token_freqs:
+            if freq < min_freq:
+                break
+            if token not in self.token_to_idx:
+                self.idx_to_token.append(token)
+                self.token_to_idx[token] = len(self.idx_to_token) - 1
+
+    def __len__(self):
+        return len(self.idx_to_token)
+
+    def __getitem__(self, tokens):
+        if not isinstance(tokens, (list, tuple)):
+            return self.token_to_idx.get(tokens, self.unk)
+        return [self.__getitem__(token) for token in tokens]
+
+    @property
+    def unk(self):  # 返回 unknown token 的idx
+        return 0
+
+    @property
+    def token_freqs(self):
+        return self._token_freqs
+
+
+# 使用随机抽样生成文本的mini-batch
+def seq_data_iter_random(corpus, batch_size, num_steps):
+    corpus = corpus[random.randint(0, num_steps - 1)]  # 一个随机的起始点来生成subseqs
+    num_subseqs = (len(corpus) - 1) // num_steps
+    initial_indices = list(range(0, num_subseqs * num_steps, num_steps))  # initial_indices存了起点的pos
+    random.shuffle(initial_indices)
+
+    def data(pos):
+        return corpus[pos: pos + num_steps]
+
+    num_batches = num_subseqs // batch_size
+    for i in range(0, batch_size * num_batches, batch_size):
+        initial_indices_per_batch = initial_indices[i: i + batch_size]
+        x = [data(j) for j in initial_indices_per_batch]
+        y = [data(j + 1) for j in initial_indices_per_batch]
+        yield torch.tensor(x), torch.tensor(y)
+
+
+# 使用顺序分区生成文本的mini-batch
+def seq_data_iter_sequential(corpus, batch_size, num_steps):
+    offset = random.randint(0, num_steps)
+    num_tokens = ((len(corpus) - offset - 1) // batch_size) * batch_size
+    xs = torch.tensor(corpus[offset: offset + num_tokens])
+    ys = torch.tensor(corpus[offset + 1: offset + 1 + num_tokens])
+    xs, ys = xs.reshape(batch_size, -1), ys.reshape(batch_size, -1)
+    num_batches = xs.shape[1] // num_steps
+    for i in range(0, num_batches * batch_size, batch_size):
+        x = xs[:, i: i + num_steps]
+        y = ys[:, i: i + num_steps]
+        yield x, y
+
+
+# 读取time-machine
+def read_time_machine():
+    with open('./data/time_machine.txt', 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    return [re.sub('[^A-Za-z]+', ' ', line).strip().lower() for line in lines]
+
+
+# load time-machine数据
+def load_corpus_time_machine(max_tokens=-1):
+    lines = read_time_machine()
+    tokens = tokenize(lines, 'char')
+    vocab = Vocab(tokens)
+    corpus = [vocab[token] for line in tokens for token in line]
+    if max_tokens > 0:
+        corpus = corpus[:max_tokens]
+    return corpus, vocab
+
+
+# 构建文本数据集
+class SeqDataLoader:
+    def __init__(self, batch_size, num_steps, use_random_iter, max_tokens):
+        if use_random_iter:
+            self.data_iter_fn = seq_data_iter_random
+        else:
+            self.data_iter_fn = seq_data_iter_sequential
+        self.corpus, self.vocab = load_corpus_time_machine(max_tokens)
+        self.batch_size, self.num_steps = batch_size, num_steps
+
+    def __iter__(self):
+        return self.data_iter_fn(self.corpus, self.batch_size, self.num_steps)
+
+
+# 生成文本数据迭代器
+def load_data_time_machine(batch_size, num_steps, use_random_iter=False, max_tokens=10000):
+    data_iter = SeqDataLoader(batch_size, num_steps, use_random_iter, max_tokens)
+    return data_iter, data_iter.vocab
