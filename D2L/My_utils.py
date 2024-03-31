@@ -959,6 +959,7 @@ class Vocab:
                 self.token_to_idx[token] = len(self.idx_to_token) - 1
 
     def __len__(self):
+        # 返回的是该vocab词表的词汇有多少种，即后续的vocab_size
         return len(self.idx_to_token)
 
     def __getitem__(self, tokens):
